@@ -1,6 +1,6 @@
 streamlit>=1.26.0
 matplotlib>=3.10.7
 seaborn>=0.13.2
-imblearn>=0.14.0
+imblearn
 sklearn>=1.7.2
 xgboost>=3.1.0
