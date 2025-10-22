@@ -1,0 +1,250 @@
+# Import necessary libraries
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.datasets import load_iris, make_classification
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.tree import plot_tree
+import joblib
+import json
+import warnings
+
+warnings.filterwarnings('ignore')
+
+# Set random seed for reproducibility
+np.random.seed(42)
+
+
+def create_and_train_random_forest():
+    """Complete Random Forest implementation with training and saving"""
+
+    print("Random Forest Implementation with Visualization and Model Saving")
+    print("=" * 60)
+
+    # 1. Load Dataset (using Iris as example)
+    print("1. Loading Dataset...")
+    iris = load_iris()
+    X = pd.DataFrame(iris.data, columns=iris.feature_names)
+    y = iris.target
+
+    print(f"Dataset Shape: {X.shape}")
+    print(f"Features: {list(X.columns)}")
+    print(f"Target classes: {iris.target_names}")
+
+    # 2. Split the data
+    print("\n2. Splitting Data...")
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+
+    print(f"Training set size: {X_train.shape[0]}")
+    print(f"Testing set size: {X_test.shape[0]}")
+
+    # 3. Create and train Random Forest model
+    print("\n3. Training Random Forest Model...")
+    rf_model = RandomForestClassifier(
+        n_estimators=100,  # Number of trees
+        max_depth=5,  # Maximum depth of trees
+        min_samples_split=2,  # Minimum samples to split
+        min_samples_leaf=1,  # Minimum samples at leaf
+        random_state=42,
+        n_jobs=-1,  # Use all processors
+        oob_score=True  # Enable out-of-bag scoring
+    )
+
+    # Train the model
+    rf_model.fit(X_train, y_train)
+
+    # Make predictions
+    y_pred = rf_model.predict(X_test)
+    y_pred_proba = rf_model.predict_proba(X_test)
+
+    # 4. Evaluate the model
+    print("\n4. Model Evaluation:")
+    accuracy = accuracy_score(y_test, y_pred)
+    print(f"Accuracy: {accuracy:.4f}")
+    print(f"Out-of-bag score: {rf_model.oob_score_:.4f}")
+
+    print("\nClassification Report:")
+    print(classification_report(y_test, y_pred, target_names=iris.target_names))
+
+    print("\nConfusion Matrix:")
+    cm = confusion_matrix(y_test, y_pred)
+    print(cm)
+
+    # 5. Feature importance analysis
+    print("\n5. Feature Importance Analysis:")
+    feature_importance = pd.DataFrame({
+        'feature': X.columns,
+        'importance': rf_model.feature_importances_
+    }).sort_values('importance', ascending=False)
+
+    print(feature_importance)
+
+    # 6. Create visualizations
+    print("\n6. Creating Visualizations...")
+
+    # Feature importance plot
+    plt.figure(figsize=(12, 8))
+
+    plt.subplot(2, 2, 1)
+    plt.barh(feature_importance['feature'], feature_importance['importance'])
+    plt.title('Feature Importance')
+    plt.xlabel('Importance')
+
+    # Confusion matrix heatmap
+    plt.subplot(2, 2, 2)
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=iris.target_names,
+                yticklabels=iris.target_names)
+    plt.title('Confusion Matrix')
+    plt.ylabel('Actual')
+    plt.xlabel('Predicted')
+
+    # Individual tree visualization (first tree)
+    plt.subplot(2, 2, 3)
+    plot_tree(rf_model.estimators_[0],
+              feature_names=X.columns,
+              class_names=iris.target_names,
+              filled=True,
+              max_depth=3,
+              fontsize=8)
+    plt.title('Sample Decision Tree (Tree 0)')
+
+    # Prediction probabilities for test samples
+    plt.subplot(2, 2, 4)
+    sample_probs = y_pred_proba[:10]  # First 10 test samples
+    x_pos = np.arange(len(sample_probs))
+
+    for i, class_name in enumerate(iris.target_names):
+        plt.bar(x_pos + i * 0.25, sample_probs[:, i],
+                width=0.25, label=class_name, alpha=0.7)
+
+    plt.title('Prediction Probabilities (First 10 Samples)')
+    plt.xlabel('Sample Index')
+    plt.ylabel('Probability')
+    plt.legend()
+    plt.xticks(x_pos + 0.25, range(10))
+
+    plt.tight_layout()
+    plt.savefig('random_forest_analysis.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+    # 7. Save the model and related files
+    print("\n7. Saving Model and Results...")
+
+    # Save the trained model
+    model_filename = 'random_forest_model.pkl'
+    joblib.dump(rf_model, model_filename)
+    print(f"Model saved as '{model_filename}'")
+
+    # Save feature importance
+    feature_importance.to_csv('feature_importance.csv', index=False)
+    print("Feature importance saved to 'feature_importance.csv'")
+
+    # Save model information
+    model_info = {
+        'accuracy': float(accuracy),
+        'oob_score': float(rf_model.oob_score_),
+        'n_estimators': rf_model.n_estimators,
+        'max_depth': rf_model.max_depth,
+        'feature_names': list(X.columns),
+        'target_names': list(iris.target_names),
+        'model_params': rf_model.get_params(),
+        'confusion_matrix': cm.tolist(),
+        'feature_importance': feature_importance.to_dict('records')
+    }
+
+    with open('model_info.json', 'w') as f:
+        json.dump(model_info, f, indent=2, default=str)
+    print("Model information saved as 'model_info.json'")
+
+    # Save predictions and probabilities
+    results_df = pd.DataFrame({
+        'actual': y_test,
+        'predicted': y_pred,
+        'correct': y_test == y_pred
+    })
+
+    # Add probability columns
+    for i, class_name in enumerate(iris.target_names):
+        results_df[f'prob_{class_name}'] = y_pred_proba[:, i]
+
+    results_df.to_csv('predictions.csv', index=False)
+    print("Predictions saved to 'predictions.csv'")
+
+    # 8. Test loading the saved model
+    print("\n8. Testing Saved Model:")
+    loaded_model = joblib.load(model_filename)
+    loaded_predictions = loaded_model.predict(X_test)
+    loaded_accuracy = accuracy_score(y_test, loaded_predictions)
+
+    print(f"Loaded model accuracy: {loaded_accuracy:.4f}")
+    print(f"Original model accuracy: {accuracy:.4f}")
+    print(f"Models match: {loaded_accuracy == accuracy}")
+
+    # 9. Example predictions with new data
+    print("\n9. Example Predictions:")
+    sample_data = X_test.iloc[:3]  # Take first 3 test samples
+    predictions = loaded_model.predict(sample_data)
+    probabilities = loaded_model.predict_proba(sample_data)
+
+    for i, (idx, row) in enumerate(sample_data.iterrows()):
+        print(f"\nSample {i + 1}:")
+        print(f"Features: {row.values}")
+        print(f"Predicted class: {iris.target_names[predictions[i]]}")
+        print(f"Actual class: {iris.target_names[y_test[i]]}")
+        print(f"Prediction probabilities: {probabilities[i]}")
+
+    print("\n" + "=" * 60)
+    print("Random Forest training and analysis completed!")
+    print("Files created:")
+    print("- random_forest_model.pkl (trained model)")
+    print("- model_info.json (model metadata)")
+    print("- feature_importance.csv (feature rankings)")
+    print("- predictions.csv (test predictions)")
+    print("- random_forest_analysis.png (visualizations)")
+    print("=" * 60)
+
+    return rf_model, accuracy, feature_importance
+
+
+# Alternative function for custom datasets
+def train_random_forest_custom(X, y, target_names=None, test_size=0.2):
+    """Train Random Forest on custom dataset"""
+
+    if target_names is None:
+        target_names = [f'Class_{i}' for i in range(len(np.unique(y)))]
+
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=42, stratify=y
+    )
+
+    # Create and train model
+    rf_model = RandomForestClassifier(
+        n_estimators=100,
+        max_depth=10,
+        random_state=42,
+        oob_score=True,
+        n_jobs=-1
+    )
+
+    rf_model.fit(X_train, y_train)
+
+    # Evaluate
+    y_pred = rf_model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+
+    print(f"Custom Dataset Accuracy: {accuracy:.4f}")
+    print(f"OOB Score: {rf_model.oob_score_:.4f}")
+
+    return rf_model, accuracy
+
+
+# Run the main function
+if __name__ == "__main__":
+    model, accuracy, importance = create_and_train_random_forest()
