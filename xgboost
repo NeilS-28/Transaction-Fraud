@@ -1,0 +1,175 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from imblearn.over_sampling import SMOTE
+from sklearn.model_selection import train_test_split
+import xgboost as xgb
+from sklearn.metrics import precision_score, recall_score, classification_report, confusion_matrix
+from sklearn.metrics import roc_curve, auc, accuracy_score, f1_score
+import numpy as np
+
+# Load the dataset
+data = pd.read_csv('creditcard.csv')
+print(data.head())
+print('\n\nRows and columns: ', data.shape)
+print('\n\nColumn names: ', data.columns)
+print('\n\n', data['Class'].value_counts())
+print('Statistical summary: \n\n', data.describe())
+
+# Data Visualization
+# Amount spent distribution
+plt.figure(figsize=(10, 6))
+data['Amount'].hist(bins=50)
+plt.title("Distribution of Transaction Amounts")
+plt.xlabel("Amount")
+plt.ylabel("Count")
+plt.show()
+
+# Boxplot for Amount by Class (fraud/not fraud)
+plt.figure(figsize=(8, 6))
+sns.boxplot(x='Class', y='Amount', data=data)
+plt.title("Transaction Amounts by Class")
+plt.show()
+
+# Class distribution visualization
+plt.figure(figsize=(8, 6))
+data['Class'].value_counts().plot(kind='bar')
+plt.title("Class Distribution (0: Normal, 1: Fraud)")
+plt.xlabel("Class")
+plt.ylabel("Count")
+plt.show()
+
+# Prepare features and labels
+X = data.drop('Class', axis=1)  # Features
+y = data['Class']  # Labels
+
+# Apply SMOTE for handling imbalanced dataset
+sm = SMOTE(random_state=42)
+X_res, y_res = sm.fit_resample(X, y)
+print("Original Shape:", X.shape)
+print("Balanced Shape:", X_res.shape)
+print("Original Class Distribution:\n", pd.Series(y).value_counts())
+print("Balanced Class Distribution:\n", pd.Series(y_res).value_counts())
+
+# Split the data
+X_train, X_test, y_train, y_test = train_test_split(X_res, y_res, test_size=0.2, random_state=42)
+
+# Create and train XGBoost model
+model = xgb.XGBClassifier(
+    n_estimators=100,          # Number of boosting rounds
+    max_depth=6,               # Maximum depth of trees
+    learning_rate=0.1,         # Step size shrinkage
+    subsample=0.8,             # Subsample ratio of training instances
+    colsample_bytree=0.8,      # Subsample ratio of columns when constructing each tree
+    reg_alpha=0.1,             # L1 regularization term
+    reg_lambda=1,              # L2 regularization term
+    random_state=42,
+    n_jobs=-1,                 # Use all available cores
+    eval_metric='logloss'      # Evaluation metric
+)
+
+print("Training XGBoost model...")
+model.fit(X_train, y_train)
+
+# Make predictions
+y_pred = model.predict(X_test)
+y_probs = model.predict_proba(X_test)[:, 1]
+
+# Calculate metrics
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+accuracy = accuracy_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
+
+print("\n=== Model Performance ===")
+print(f"Accuracy: {accuracy:.4f}")
+print(f"Precision: {precision:.4f}")
+print(f"Recall: {recall:.4f}")
+print(f"F1-Score: {f1:.4f}")
+
+# Detailed classification report
+print("\n=== Classification Report ===")
+print(classification_report(y_test, y_pred))
+
+# Confusion Matrix
+print("\n=== Confusion Matrix ===")
+cm = confusion_matrix(y_test, y_pred)
+print(cm)
+
+# Plot Confusion Matrix
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+plt.title('Confusion Matrix - XGBoost')
+plt.xlabel('Predicted Label')
+plt.ylabel('True Label')
+plt.show()
+
+# ROC Curve and AUC
+fpr, tpr, thresholds = roc_curve(y_test, y_probs)
+auc_score = auc(fpr, tpr)
+
+print(f"\nAUC Score: {auc_score:.4f}")
+
+# Plot ROC Curve
+plt.figure(figsize=(8, 6))
+plt.plot(fpr, tpr, label=f'ROC Curve (AUC = {auc_score:.4f})', linewidth=2)
+plt.plot([0, 1], [0, 1], 'k--', label='Random Classifier')
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curve - XGBoost')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
+
+# Feature Importance
+feature_importance = pd.DataFrame({
+    'feature': X.columns,
+    'importance': model.feature_importances_
+}).sort_values('importance', ascending=False)
+
+print("\n=== Top 10 Most Important Features ===")
+print(feature_importance.head(10))
+
+# Plot Feature Importance
+plt.figure(figsize=(10, 8))
+top_features = feature_importance.head(15)
+plt.barh(range(len(top_features)), top_features['importance'])
+plt.yticks(range(len(top_features)), top_features['feature'])
+plt.xlabel('Feature Importance')
+plt.title('Top 15 Feature Importances - XGBoost')
+plt.gca().invert_yaxis()
+plt.tight_layout()
+plt.show()
+
+# XGBoost specific feature importance plot (built-in)
+plt.figure(figsize=(10, 8))
+xgb.plot_importance(model, max_num_features=15, importance_type='weight')
+plt.title('XGBoost Feature Importance (Weight)')
+plt.tight_layout()
+plt.show()
+
+# Model parameters summary
+print("\n=== XGBoost Model Parameters ===")
+print(f"Number of estimators: {model.n_estimators}")
+print(f"Max depth: {model.max_depth}")
+print(f"Learning rate: {model.learning_rate}")
+print(f"Subsample: {model.subsample}")
+print(f"Colsample by tree: {model.colsample_bytree}")
+print(f"Reg Alpha (L1): {model.reg_alpha}")
+print(f"Reg Lambda (L2): {model.reg_lambda}")
+
+# Additional XGBoost metrics
+print("\n=== Additional Information ===")
+print(f"Number of features: {model.n_features_in_}")
+print(f"Number of classes: {model.n_classes_}")
+
+# Prediction probabilities distribution
+plt.figure(figsize=(10, 6))
+plt.hist(y_probs[y_test == 0], bins=50, alpha=0.7, label='Normal Transactions', density=True)
+plt.hist(y_probs[y_test == 1], bins=50, alpha=0.7, label='Fraud Transactions', density=True)
+plt.xlabel('Prediction Probability')
+plt.ylabel('Density')
+plt.title('Distribution of Prediction Probabilities')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
