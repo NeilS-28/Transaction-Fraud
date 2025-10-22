@@ -226,4 +226,63 @@ def main():
                 "Recall": round(m["Recall"], 4),
                 "F1": round(m["F1"], 4)
             })
-        cmp_df = pd.DataFrame(cmp).sort_values("F1", ascending
+        cmp_df = pd.DataFrame(cmp).sort_values("F1", ascending=False).reset_index(drop=True)
+        st.dataframe(cmp_df, use_container_width=True)
+
+        st.subheader("ROC comparison")
+        roc_curves = {name: r["roc"] for name, r in results.items()}
+        plot_roc_curves(roc_curves)
+
+        st.subheader("Thresholding tool")
+        chosen = st.selectbox("Choose model for thresholding", list(models.keys()))
+        if results[chosen]["y_prob"] is not None:
+            thr = st.slider("Decision threshold", 0.0, 1.0, 0.5, 0.01)
+            probs = results[chosen]["y_prob"]
+            thr_preds = (probs >= thr).astype(int)
+            cm_thr = confusion_matrix(y_test, thr_preds)
+            st.write(f"Confusion Matrix at threshold {thr:.2f}")
+            plot_confusion_matrix(cm_thr)
+        else:
+            st.info("Selected model does not output probabilities.")
+
+    # Per-model tabs
+    for idx, model_name in enumerate(["Logistic Regression", "Decision Tree", "Random Forest", "XGBoost"], start=1):
+        with tabs[idx]:
+            st.header(model_name)
+
+            r = results[model_name]
+            m = r["metrics"]
+            st.write(f"Accuracy: {m['Accuracy']:.4f} | Precision: {m['Precision']:.4f} | Recall: {m['Recall']:.4f} | F1: {m['F1']:.4f}")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("Confusion Matrix")
+                plot_confusion_matrix(r["cm"])
+            with col2:
+                st.subheader("ROC Curve")
+                fpr, tpr, roc_auc = r["roc"]
+                if fpr is not None:
+                    fig, ax = plt.subplots(figsize=(5, 4))
+                    ax.plot(fpr, tpr, label=f"AUC = {roc_auc:.3f}", linewidth=2)
+                    ax.plot([0, 1], [0, 1], "k--")
+                    ax.set_xlabel("FPR")
+                    ax.set_ylabel("TPR")
+                    ax.set_title(f"ROC - {model_name}")
+                    ax.legend()
+                    ax.grid(alpha=0.3)
+                    st.pyplot(fig)
+                else:
+                    st.info("No probability output, ROC unavailable.")
+
+            st.subheader("Feature importance / coefficients")
+            plot_feature_importance(r["model"], feature_names, f"Top Features - {model_name}")
+
+            st.subheader("Detected outputs (sample)")
+            show_prediction_samples(X_test, y_test, r["y_pred"], r["y_prob"], n=10)
+
+            st.subheader("Classification report")
+            report_df = pd.DataFrame(r["report"]).T
+            st.dataframe(report_df, use_container_width=True)
+
+if __name__ == "__main__":
+    main()
