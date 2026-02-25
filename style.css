@@ -1,0 +1,106 @@
+
+/* Modern, minimal, and colorful UI inspired by pop.popingroup.com */
+body {
+	background: #f6f8fb !important;
+	font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+}
+
+.stApp {
+	background: #f6f8fb !important;
+}
+
+/* Gradient header */
+.gradient-header {
+	width: 100vw;
+	margin-left: -48px;
+	margin-top: -48px;
+	padding: 48px 0 32px 0;
+	background: linear-gradient(90deg, #6a82fb 0%, #fc5c7d 100%);
+	color: #fff;
+	text-align: center;
+	border-radius: 0 0 32px 32px;
+	box-shadow: 0 4px 24px rgba(100,100,200,0.08);
+}
+
+.main-card {
+	background: #fff;
+	border-radius: 24px;
+	box-shadow: 0 8px 32px rgba(80,80,120,0.10);
+	padding: 40px 32px 32px 32px;
+	max-width: 480px;
+	margin: 40px auto 0 auto;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+}
+
+.stButton > button {
+	background: linear-gradient(90deg, #6a82fb 0%, #fc5c7d 100%);
+	color: #fff;
+	border-radius: 12px;
+	font-size: 20px;
+	font-weight: 600;
+	padding: 14px 0;
+	width: 100%;
+	margin-top: 18px;
+	box-shadow: 0 2px 8px rgba(100,100,200,0.10);
+	border: none;
+	transition: box-shadow 0.2s, transform 0.2s;
+}
+.stButton > button:hover {
+	box-shadow: 0 6px 24px rgba(252,92,125,0.18);
+	transform: translateY(-2px) scale(1.03);
+}
+
+.stFileUploader, .stTextInput, .stSelectbox, .stDataFrame, .stRadio > div {
+	background: #f6f8fb !important;
+	border-radius: 12px !important;
+	box-shadow: 0 2px 8px rgba(100,100,200,0.06) !important;
+	padding: 10px 16px !important;
+	font-size: 18px !important;
+	margin-bottom: 18px !important;
+}
+
+h1, .stTitle {
+	font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+	font-size: 2.5rem;
+	font-weight: 800;
+	color: #fff;
+	margin-bottom: 0.2em;
+	letter-spacing: -1px;
+	text-shadow: 0 2px 16px #6a82fb, 0 0 2px #fff;
+}
+
+.stMarkdown, .stInfo, .stSuccess, .stWarning, .stAlert {
+	font-size: 1.1rem;
+	color: #333;
+	background: none !important;
+	box-shadow: none !important;
+}
+
+@media (max-width: 600px) {
+	.main-card {
+		padding: 18px 4px 18px 4px;
+		max-width: 98vw;
+	}
+	.gradient-header {
+		padding: 32px 0 18px 0;
+		font-size: 1.2rem;
+	}
+	h1, .stTitle {
+		font-size: 1.5rem;
+	}
+}
+
+/* Responsive tweaks */
+@media (max-width: 600px) {
+	.stApp::before {
+		background-size: auto 100vh;
+	}
+	h1, .stTitle {
+		font-size: 2rem;
+	}
+	.stMarkdown > div, .stMarkdown, .stContainer, .stDataFrame {
+		padding: 12px 8px !important;
+	}
+}

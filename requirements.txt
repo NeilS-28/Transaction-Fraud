@@ -1,0 +1,11 @@
+streamlit
+pandas
+numpy
+scikit-learn
+joblib
+PyPDF2
+matplotlib
+seaborn
+xgboost
+reflex
+streamlit-autorefresh
