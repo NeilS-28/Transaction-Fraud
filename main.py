@@ -1,288 +1,403 @@
-# app.py
+
+
+
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
+import joblib
+import PyPDF2
+import re
+from sklearn.metrics import roc_curve, auc, recall_score
+import time
+from datetime import datetime
 
-from imblearn.over_sampling import SMOTE
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
-    confusion_matrix, roc_curve, auc, classification_report
-)
+# --- Model Paths ---
+DT_PATH = 'decision_tree_model.joblib'
+RF_PATH = 'random_Forest_model.pkl'
+XGB_PATH = 'XGBoost_model.joblib'
+LR_PATH = 'logistic_regression_model.joblib'
+SCALER_PKL = 'scaler.pkl'
+SCALER_JOBLIB = 'scaler.joblib'
+ALLOWED_EXTENSIONS = ['csv', 'pdf']
 
-from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier
-import xgboost as xgb
-
-st.set_page_config(page_title="Fraud Detection Model Dashboard", layout="wide")
-
-@st.cache_data(show_spinner=False)
-def load_data(csv_path):
-    df = pd.read_csv(csv_path)
-    return df
-
-def prepare_data(df, target_col="Class", test_size=0.2, random_state=42):
-    X = df.drop(target_col, axis=1)
-    y = df[target_col]
-    sm = SMOTE(random_state=random_state)
-    X_res, y_res = sm.fit_resample(X, y)
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_res, y_res, test_size=test_size, random_state=random_state, stratify=y_res
-    )
-    return X_train, X_test, y_train, y_test, X.columns
-
-def train_models(X_train, y_train, random_state=42):
-    models = {}
-
-    # Logistic Regression
-    lr = LogisticRegression(max_iter=1000)
-    lr.fit(X_train, y_train)
-    models["Logistic Regression"] = lr
-
-    # Decision Tree
-    dt = DecisionTreeClassifier(
-        max_depth=10,
-        min_samples_split=20,
-        min_samples_leaf=10,
-        max_features="sqrt",
-        criterion="entropy",
-        class_weight="balanced",
-        random_state=random_state,
-    )
-    dt.fit(X_train, y_train)
-    models["Decision Tree"] = dt
-
-    # Random Forest
-    rf = RandomForestClassifier(
-        n_estimators=100,
-        max_depth=10,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        random_state=random_state,
-        n_jobs=-1,
-    )
-    rf.fit(X_train, y_train)
-    models["Random Forest"] = rf
-
-    # XGBoost
-    xgb_model = xgb.XGBClassifier(
-        n_estimators=200,
-        max_depth=6,
-        learning_rate=0.1,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_alpha=0.1,
-        reg_lambda=1.0,
-        random_state=random_state,
-        n_jobs=-1,
-        eval_metric="logloss",
-        use_label_encoder=False
-    )
-    xgb_model.fit(X_train, y_train)
-    models["XGBoost"] = xgb_model
-
-    return models
-
-def evaluate_model(model, X_test, y_test):
-    y_pred = model.predict(X_test)
-    if hasattr(model, "predict_proba"):
-        y_prob = model.predict_proba(X_test)[:, 1]
-    else:
-        y_prob = None
-
-    metrics = {
-        "Accuracy": accuracy_score(y_test, y_pred),
-        "Precision": precision_score(y_test, y_pred, zero_division=0),
-        "Recall": recall_score(y_test, y_pred, zero_division=0),
-        "F1": f1_score(y_test, y_pred, zero_division=0),
-    }
-
+@st.cache_resource
+def load_models():
     try:
-        if y_prob is not None:
-            fpr, tpr, _ = roc_curve(y_test, y_prob)
-            roc_auc = auc(fpr, tpr)
+        dt = joblib.load(DT_PATH)
+        rf = joblib.load(RF_PATH)
+        xgb = joblib.load(XGB_PATH)
+        lr = joblib.load(LR_PATH)
+        try:
+            scaler = joblib.load(SCALER_PKL)
+        except:
+            scaler = joblib.load(SCALER_JOBLIB)
+        return dt, rf, xgb, lr, scaler
+    except Exception as e:
+        st.error(f"Error loading models: {e}")
+        return None, None, None, None, None
+
+dt_model, rf_model, xgb_model, lr_model, scaler = load_models()
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def extract_csv_from_pdf(pdf_file):
+    try:
+        pdfreader = PyPDF2.PdfReader(pdf_file)
+        text = ''
+        for page in pdfreader.pages:
+            text += page.extract_text()
+        lines = text.strip().split('\n')
+        data = []
+        for line in lines:
+            row = re.split(r',\s*', line.strip())
+            if len(row) > 1:
+                data.append(row)
+        if data:
+            df = pd.DataFrame(data[1:], columns=data[0])
+            return df
         else:
-            fpr, tpr, roc_auc = None, None, None
-    except Exception:
-        fpr, tpr, roc_auc = None, None, None
+            return None
+    except Exception as e:
+        st.error(f"PDF extraction error: {e}")
+        return None
 
-    cm = confusion_matrix(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
+def preprocess_data(df):
+    try:
+        required_cols = ['Time'] + [f'V{i}' for i in range(1, 29)] + ['Amount']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            if 'Time' in missing_cols:
+                required_cols = [f'V{i}' for i in range(1, 29)] + ['Amount']
+                missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                return None, None, f"Missing required columns: {', '.join(missing_cols)}"
+        for col in required_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        df = df.dropna(subset=required_cols)
+        if len(df) == 0:
+            return None, None, "No valid data found after cleaning."
+        y_true = None
+        if 'Class' in df.columns:
+            df['Class'] = pd.to_numeric(df['Class'], errors='coerce')
+            y_true = df['Class'].values
+        feature_cols = required_cols
+        X = df[feature_cols].copy()
+        X_scaled = scaler.transform(X)
+        return X_scaled, y_true, None
+    except Exception as e:
+        return None, None, f"Preprocessing error: {str(e)}"
 
-    return metrics, cm, (fpr, tpr, roc_auc), y_pred, y_prob, report
+def predict_fraud(X_scaled, model):
+    try:
+        predictions = model.predict(X_scaled)
+        probabilities = model.predict_proba(X_scaled)[:, 1]
+        return predictions.astype(int), probabilities
+    except Exception as e:
+        st.error(f"Prediction error: {e}")
+        return None, None
 
-def plot_confusion_matrix(cm):
-    fig, ax = plt.subplots(figsize=(4, 3))
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax)
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("Actual")
-    ax.set_title("Confusion Matrix")
-    st.pyplot(fig)
+def generate_demo_transaction():
+    merchants = ["Amazon", "Walmart", "Target", "Starbucks", "McDonald's", "Shell Gas", "Apple Store", "Best Buy", "Netflix", "Uber"]
+    t_id = f"TXN{np.random.randint(100000, 999999)}"
+    amount = np.random.choice([np.random.uniform(5, 500), np.random.uniform(1000, 5000) if np.random.random() < 0.15 else np.random.uniform(5, 500)])
+    is_fraud = np.random.random() < 0.20
+    fraud_prob = np.random.uniform(0.7, 0.99) if is_fraud else np.random.uniform(0.01, 0.35)
+    merchant = np.random.choice(merchants)
+    card_last4 = f"****{np.random.randint(1000, 9999)}"
+    status = 'pending'
+    return dict(id=t_id, datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), amount=amount, merchant=merchant, card=card_last4,
+                fraud_prob=fraud_prob, is_fraud=is_fraud, status=status, created_at=time.time())
 
-def plot_roc_curves(roc_curves_dict):
-    fig, ax = plt.subplots(figsize=(5, 4))
-    any_curve = False
-    for name, v in roc_curves_dict.items():
-        if v is None:
-            continue
-        fpr, tpr, roc_auc = v
-        if fpr is not None and tpr is not None and roc_auc is not None:
-            ax.plot(fpr, tpr, label=f"{name} (AUC={roc_auc:.3f})", linewidth=2)
-            any_curve = True
-    ax.plot([0, 1], [0, 1], "k--", label="Random")
-    ax.set_xlabel("False Positive Rate")
-    ax.set_ylabel("True Positive Rate")
-    ax.set_title("ROC Curves")
-    if any_curve:
-        ax.legend()
-    ax.grid(alpha=0.3)
-    st.pyplot(fig)
+if 'demo_transactions' not in st.session_state:
+    st.session_state.demo_transactions = []
+    st.session_state.last_update = time.time()
+if "analysis_results" not in st.session_state:
+    st.session_state.analysis_results = None
+    st.session_state.show_results = False
 
-def plot_feature_importance(model, feature_names, title):
-    if hasattr(model, "feature_importances_"):
-        importances = model.feature_importances_
-        order = np.argsort(importances)[::-1][:15]
-        fig, ax = plt.subplots(figsize=(6, 5))
-        ax.barh(np.array(feature_names)[order][::-1], importances[order][::-1])
-        ax.set_title(title)
-        ax.set_xlabel("Importance")
-        st.pyplot(fig)
-    elif hasattr(model, "coef_"):
-        coefs = model.coef_.ravel()
-        order = np.argsort(np.abs(coefs))[::-1][:15]
-        fig, ax = plt.subplots(figsize=(6, 5))
-        ax.barh(np.array(feature_names)[order][::-1], coefs[order][::-1])
-        ax.set_title(title + " (Top Coefficients)")
-        ax.set_xlabel("Coefficient")
-        st.pyplot(fig)
-    else:
-        st.info("No feature importance or coefficients available for this model.")
+st.set_page_config(page_title="Fraud Detection", layout="wide")
+main_col, dashboard_col = st.columns([2, 1])
 
-def show_prediction_samples(X_test, y_test, preds, probs, n=10):
-    df = pd.DataFrame(X_test).copy()
-    df["Actual"] = np.array(y_test)
-    df["Predicted"] = preds
-    if probs is not None:
-        df["Fraud_Prob"] = probs
-    st.dataframe(df.head(n))
+# ========= LEFT: APP UI & RESULTS =========
+with main_col:
+    st.title("Fraud Detection System")
+    st.markdown("### CREDIT CARD TRANSACTION ANALYSIS")
+    st.info(
+        "How to Use:\n- Upload your credit card transaction data (CSV or PDF)\n- File must have columns: Time, V1-V28, Amount\n"
+        "- Optional: Include 'Class' column (0=Legitimate, 1=Fraud) for ROC AUC and Recall metrics\n"
+        "- Click Check Transaction to analyze with all 4 models")
 
-def main():
-    st.title("Transaction Fraud Detection – Model Comparison Dashboard")
-    st.write("Upload creditcard.csv or keep default path. Then train, visualize, and compare four models.")
+    uploaded_file = st.file_uploader("Choose your file (CSV or PDF)", type=ALLOWED_EXTENSIONS)
+    check = st.button("Check Transaction", use_container_width=True)
 
-    # Sidebar
-    st.sidebar.header("Data & Settings")
-    uploaded = st.sidebar.file_uploader("Upload creditcard.csv", type=["csv"])
-    default_path = st.sidebar.text_input("Or path to creditcard.csv", "creditcard.csv")
-    test_size = st.sidebar.slider("Test size", 0.1, 0.4, 0.2, 0.05)
-    random_state = st.sidebar.number_input("Random state", min_value=0, value=42, step=1)
-
-    if uploaded is not None:
-        df = pd.read_csv(uploaded)
-    else:
-        df = load_data(default_path)
-
-    st.subheader("Data preview")
-    st.dataframe(df.head(), use_container_width=True)
-
-    # Train once across all models with consistent split/SMOTE
-    X_train, X_test, y_train, y_test, feature_names = prepare_data(
-        df, target_col="Class", test_size=test_size, random_state=random_state
-    )
-
-    with st.spinner("Training models..."):
-        models = train_models(X_train, y_train, random_state=random_state)
-
-    # Evaluate all
-    results = {}
-    for name, model in models.items():
-        metrics, cm, roc_data, y_pred, y_prob, report = evaluate_model(model, X_test, y_test)
-        results[name] = {
-            "metrics": metrics,
-            "cm": cm,
-            "roc": roc_data,
-            "y_pred": y_pred,
-            "y_prob": y_prob,
-            "report": report,
-            "model": model
-        }
-
-    # Tabs
-    tabs = st.tabs(["Overview", "Logistic Regression", "Decision Tree", "Random Forest", "XGBoost"])
-
-    # Overview
-    with tabs[0]:
-        st.subheader("Metrics comparison")
-        cmp = []
-        for name, r in results.items():
-            m = r["metrics"]
-            cmp.append({
-                "Model": name,
-                "Accuracy": round(m["Accuracy"], 4),
-                "Precision": round(m["Precision"], 4),
-                "Recall": round(m["Recall"], 4),
-                "F1": round(m["F1"], 4)
-            })
-        cmp_df = pd.DataFrame(cmp).sort_values("F1", ascending=False).reset_index(drop=True)
-        st.dataframe(cmp_df, use_container_width=True)
-
-        st.subheader("ROC comparison")
-        roc_curves = {name: r["roc"] for name, r in results.items()}
-        plot_roc_curves(roc_curves)
-
-        st.subheader("Thresholding tool")
-        chosen = st.selectbox("Choose model for thresholding", list(models.keys()))
-        if results[chosen]["y_prob"] is not None:
-            thr = st.slider("Decision threshold", 0.0, 1.0, 0.5, 0.01)
-            probs = results[chosen]["y_prob"]
-            thr_preds = (probs >= thr).astype(int)
-            cm_thr = confusion_matrix(y_test, thr_preds)
-            st.write(f"Confusion Matrix at threshold {thr:.2f}")
-            plot_confusion_matrix(cm_thr)
+    if check and uploaded_file is not None:
+        filename = uploaded_file.name
+        if not allowed_file(filename):
+            st.error("Invalid file format. Please upload a CSV or PDF.")
         else:
-            st.info("Selected model does not output probabilities.")
-
-    # Per-model tabs
-    for idx, model_name in enumerate(["Logistic Regression", "Decision Tree", "Random Forest", "XGBoost"], start=1):
-        with tabs[idx]:
-            st.header(model_name)
-
-            r = results[model_name]
-            m = r["metrics"]
-            st.write(f"Accuracy: {m['Accuracy']:.4f} | Precision: {m['Precision']:.4f} | Recall: {m['Recall']:.4f} | F1: {m['F1']:.4f}")
-
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("Confusion Matrix")
-                plot_confusion_matrix(r["cm"])
-            with col2:
-                st.subheader("ROC Curve")
-                fpr, tpr, roc_auc = r["roc"]
-                if fpr is not None:
-                    fig, ax = plt.subplots(figsize=(5, 4))
-                    ax.plot(fpr, tpr, label=f"AUC = {roc_auc:.3f}", linewidth=2)
-                    ax.plot([0, 1], [0, 1], "k--")
-                    ax.set_xlabel("FPR")
-                    ax.set_ylabel("TPR")
-                    ax.set_title(f"ROC - {model_name}")
-                    ax.legend()
-                    ax.grid(alpha=0.3)
-                    st.pyplot(fig)
+            try:
+                if filename.endswith('.csv'):
+                    df = pd.read_csv(uploaded_file)
                 else:
-                    st.info("No probability output, ROC unavailable.")
+                    df = extract_csv_from_pdf(uploaded_file)
+                if df is None:
+                    st.error("Could not extract data from the uploaded file.")
+                else:
+                    X_scaled, y_true, error = preprocess_data(df)
+                    if error:
+                        st.error(error)
+                    else:
+                        models = {
+                            "Decision Tree": dt_model,
+                            "Random Forest": rf_model,
+                            "XGBoost": xgb_model,
+                            "Logistic Regression": lr_model,
+                        }
+                        preds, probs = {}, {}
+                        for name, model in models.items():
+                            pred, prob = predict_fraud(X_scaled, model)
+                            preds[name] = pred
+                            probs[name] = prob
+                        total_transactions = len(next(iter(preds.values())))
+                        recall_scores, roc_aucs, fprs, tprs = {}, {}, {}, {}
+                        if y_true is not None:
+                            for name in preds:
+                                recall_scores[name] = recall_score(y_true, preds[name])
+                                fprs[name], tprs[name], _ = roc_curve(y_true, probs[name])
+                                roc_aucs[name] = auc(fprs[name], tprs[name])
+                        avg_probs = {k: float(np.mean(probs[k])) for k in probs}
+                        st.session_state.analysis_results = {
+                            "names": list(models.keys()),
+                            "preds": {k: preds[k].tolist() for k in preds},
+                            "probs": {k: probs[k].tolist() for k in probs},
+                            "y_true": y_true.tolist() if y_true is not None else None,
+                            "recalls": recall_scores,
+                            "aucs": roc_aucs,
+                            "fprs": {k: fprs[k].tolist() for k in fprs} if y_true is not None else {},
+                            "tprs": {k: tprs[k].tolist() for k in tprs} if y_true is not None else {},
+                            "totals": total_transactions,
+                            "avg_probs": avg_probs,
+                        }
+                        st.session_state.show_results = True
+            except Exception as e:
+                st.error(f"Processing error: {str(e)}")
 
-            st.subheader("Feature importance / coefficients")
-            plot_feature_importance(r["model"], feature_names, f"Top Features - {model_name}")
+    # Display results after analysis and on every rerun!
+    if st.session_state.show_results and st.session_state.analysis_results:
+        res = st.session_state.analysis_results
+        models = res["names"]
+        preds = {k: np.array(res['preds'][k]) for k in models}
+        probs = {k: np.array(res['probs'][k]) for k in models}
+        total_transactions = res['totals']
+        y_true = np.array(res['y_true']) if res["y_true"] is not None else None
+        recalls, aucs = res["recalls"], res["aucs"]
+        colors = ['#6a82fb', '#ffb800', '#FC8181', '#636e72']
 
-            st.subheader("Detected outputs (sample)")
-            show_prediction_samples(X_test, y_test, r["y_pred"], r["y_prob"], n=10)
+        st.markdown("---")
+        st.markdown("## 📊 Analysis Results")
+        st.success("✅ Transaction analysis completed successfully!")
+        
+        st.subheader("📈 Overall Summary")
+        cols = st.columns(len(models) + 1)
+        cols[0].metric("Total Transactions", total_transactions)
+        for i, name in enumerate(models):
+            fraud_count = int(np.sum(preds[name]))
+            fraud_pct = (fraud_count/total_transactions)*100
+            cols[i+1].metric(f"{name} Fraud", fraud_count, f"{fraud_pct:.1f}%")
 
-            st.subheader("Classification report")
-            report_df = pd.DataFrame(r["report"]).T
-            st.dataframe(report_df, use_container_width=True)
+        st.subheader("🔍 Fraud Detection Distribution")
+        fig1, axes1 = plt.subplots(1, 4, figsize=(20, 5))
+        for i, name in enumerate(models):
+            fraud_count = np.sum(preds[name])
+            legit_count = total_transactions - fraud_count
+            axes1[i].pie([fraud_count, legit_count],
+                labels=['Fraudulent', 'Legitimate'], autopct='%1.1f%%', colors=[colors[i], '#dfe6e9'],
+                startangle=90, textprops={'color':'#232946', 'fontweight':'bold', 'fontsize': 10})
+            axes1[i].set_title(f"{name}\n({int(fraud_count)} fraudulent)", fontweight='bold', fontsize=11)
+        fig1.tight_layout()
+        st.pyplot(fig1)
 
-if __name__ == "__main__":
-    main()
+        # Probability distribution comparison
+        st.subheader("📉 Fraud Probability Distribution")
+        fig2, ax2 = plt.subplots(figsize=(12, 5))
+        for name, color in zip(models, colors):
+            ax2.hist(probs[name], bins=40, alpha=0.6, label=name, edgecolor='black', color=color, linewidth=0.8)
+        ax2.set_xlabel('Fraud Probability', fontsize=12, fontweight='bold')
+        ax2.set_ylabel('Number of Transactions', fontsize=12, fontweight='bold')
+        ax2.set_title('Fraud Probability Distribution Across Models', fontsize=14, fontweight='bold')
+        ax2.legend(loc='upper right', fontsize=10)
+        ax2.grid(True, alpha=0.3, linestyle='--')
+        ax2.set_xlim([0, 1])
+        fig2.tight_layout()
+        st.pyplot(fig2)
+
+        # Performance metrics section (only if ground truth available)
+        if y_true is not None:
+            st.subheader("🎯 Model Performance Metrics")
+            
+            # Display metrics in columns
+            metric_cols = st.columns(len(models))
+            for i, name in enumerate(models):
+                with metric_cols[i]:
+                    st.markdown(f"**{name}**")
+                    st.metric("Recall", f"{recalls[name]:.4f}")
+                    st.metric("ROC AUC", f"{aucs[name]:.4f}")
+                    st.metric("Avg Fraud Prob", f"{res['avg_probs'][name]:.4f}")
+            
+            # ROC Curve Comparison
+            st.markdown("#### ROC Curve Analysis")
+            fig3, ax3 = plt.subplots(figsize=(10, 6))
+            for name, color in zip(models, colors):
+                ax3.plot(np.array(res["fprs"][name]), np.array(res["tprs"][name]), 
+                        color=color, lw=2.5, label=f"{name} (AUC = {aucs[name]:.4f})")
+            ax3.plot([0, 1], [0, 1], color='gray', lw=2, linestyle='--', label='Random Classifier (AUC = 0.5000)')
+            ax3.set_xlim([0.0, 1.0])
+            ax3.set_ylim([0.0, 1.05])
+            ax3.set_xlabel('False Positive Rate', fontsize=12, fontweight='bold')
+            ax3.set_ylabel('True Positive Rate (Recall)', fontsize=12, fontweight='bold')
+            ax3.set_title('ROC Curve - Model Comparison', fontsize=14, fontweight='bold')
+            ax3.legend(loc="lower right", fontsize=10)
+            ax3.grid(True, alpha=0.3, linestyle='--')
+            fig3.tight_layout()
+            st.pyplot(fig3)
+
+            # Recall Score Comparison
+            st.markdown("#### Recall Score Comparison")
+            fig4, ax4 = plt.subplots(figsize=(10, 5))
+            recall_vals = [recalls[n] for n in models]
+            bars = ax4.bar(models, recall_vals, color=colors, edgecolor='black', linewidth=1.5, alpha=0.8)
+            for bar, recall in zip(bars, recall_vals):
+                height = bar.get_height()
+                ax4.text(bar.get_x() + bar.get_width()/2., height + 0.02, 
+                        f'{recall:.4f}', ha='center', va='bottom', fontsize=12, fontweight='bold')
+            ax4.set_ylim([0, 1.15])
+            ax4.set_ylabel('Recall Score', fontsize=12, fontweight='bold')
+            ax4.set_title('Recall Score - Model Comparison (Higher is Better)', fontsize=14, fontweight='bold')
+            ax4.grid(True, axis='y', alpha=0.3, linestyle='--')
+            ax4.axhline(y=1.0, color='green', linestyle='--', alpha=0.3, linewidth=1)
+            plt.xticks(rotation=15, ha='right')
+            fig4.tight_layout()
+            st.pyplot(fig4)
+            
+            # Combined metrics visualization
+            st.markdown("#### Combined Performance Overview")
+            fig5, (ax5a, ax5b) = plt.subplots(1, 2, figsize=(14, 5))
+            
+            # Recall vs ROC AUC scatter
+            recall_vals = [recalls[n] for n in models]
+            auc_vals = [aucs[n] for n in models]
+            for i, (name, color) in enumerate(zip(models, colors)):
+                ax5a.scatter(recall_vals[i], auc_vals[i], s=300, color=color, 
+                           edgecolor='black', linewidth=2, alpha=0.7, label=name)
+                ax5a.annotate(name, (recall_vals[i], auc_vals[i]), 
+                            fontsize=9, ha='center', va='center', fontweight='bold')
+            ax5a.set_xlabel('Recall Score', fontsize=11, fontweight='bold')
+            ax5a.set_ylabel('ROC AUC Score', fontsize=11, fontweight='bold')
+            ax5a.set_title('Recall vs ROC AUC', fontsize=12, fontweight='bold')
+            ax5a.grid(True, alpha=0.3, linestyle='--')
+            ax5a.set_xlim([min(recall_vals)-0.05, 1.05])
+            ax5a.set_ylim([min(auc_vals)-0.05, 1.05])
+            
+            # Detection rate comparison
+            fraud_detected = [np.sum(preds[n]) for n in models]
+            ax5b.barh(models, fraud_detected, color=colors, edgecolor='black', linewidth=1.5, alpha=0.8)
+            for i, count in enumerate(fraud_detected):
+                ax5b.text(count + max(fraud_detected)*0.02, i, str(int(count)), 
+                         va='center', fontsize=11, fontweight='bold')
+            ax5b.set_xlabel('Fraudulent Transactions Detected', fontsize=11, fontweight='bold')
+            ax5b.set_title('Fraud Detection Count', fontsize=12, fontweight='bold')
+            ax5b.grid(True, axis='x', alpha=0.3, linestyle='--')
+            
+            fig5.tight_layout()
+            st.pyplot(fig5)
+        else:
+            st.info("ℹ️ Include 'Class' column in your data (0=Legitimate, 1=Fraud) to view Recall and ROC AUC metrics.")
+
+        st.subheader("📋 Detailed Model Comparison Table")
+        comp_data = {
+            'Model': models,
+            'Fraudulent': [int(np.sum(preds[n])) for n in models],
+            'Legitimate': [int(total_transactions - np.sum(preds[n])) for n in models],
+            'Fraud %': [f"{(np.sum(preds[n])/total_transactions)*100:.2f}%" for n in models],
+            'Avg Fraud Prob': [f"{res['avg_probs'][n]:.4f}" for n in models],
+        }
+        if y_true is not None:
+            comp_data['Recall Score'] = [f"{recalls[n]:.4f}" for n in models]
+            comp_data['ROC AUC Score'] = [f"{aucs[n]:.4f}" for n in models]
+        
+        comp_df = pd.DataFrame(comp_data)
+        st.dataframe(comp_df, use_container_width=True, hide_index=True)
+        
+        # Add download button for results
+        csv = comp_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Results as CSV",
+            data=csv,
+            file_name=f"fraud_detection_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+        )
+        
+        st.markdown("---")
+        st.caption("💡 Results are cached and will persist even when the live dashboard refreshes.")
+
+# ========= RIGHT: LIVE DASHBOARD =========
+with dashboard_col:
+    st_autorefresh(interval=3000, key="fraud_dashboard")
+    st.markdown("### 🎯 Live Fraud Transaction Dashboard")
+    st.caption("Demo of real-time transaction feed (refreshes independently)")
+
+    current_time = time.time()
+    if len(st.session_state.demo_transactions) == 0 or (current_time - st.session_state.last_update) > 3:
+        st.session_state.demo_transactions.insert(0, generate_demo_transaction())
+        if len(st.session_state.demo_transactions) > 30:
+            st.session_state.demo_transactions = st.session_state.demo_transactions[:30]
+        st.session_state.last_update = current_time
+
+    for txn in st.session_state.demo_transactions:
+        age = time.time() - txn['created_at']
+        if txn['status'] == 'pending':
+            if txn['fraud_prob'] > 0.85:
+                txn['status'] = 'blocked'
+            elif txn['fraud_prob'] > 0.65 or txn['is_fraud']:
+                txn['status'] = 'reviewing'
+            else:
+                txn['status'] = 'approved'
+        if txn['status'] == 'reviewing' and age > 3:
+            txn['status'] = "blocked" if txn['is_fraud'] else "approved"
+
+    n_total = len(st.session_state.demo_transactions)
+    n_fraud = sum(tx['is_fraud'] for tx in st.session_state.demo_transactions)
+    n_blocked = sum(tx['status'] == "blocked" for tx in st.session_state.demo_transactions)
+    n_legit = sum(tx['status'] == "approved" for tx in st.session_state.demo_transactions)
+    n_review = sum(tx['status'] == "reviewing" for tx in st.session_state.demo_transactions)
+
+    st.markdown("#### 📊 Stats")
+    dash_cols = st.columns(5)
+    dash_cols[0].metric("Total", n_total)
+    dash_cols[1].metric("Fraud", n_fraud)
+    dash_cols[2].metric("Blocked", n_blocked)
+    dash_cols[3].metric("Legitimate", n_legit)
+    dash_cols[4].metric("Review", n_review)
+    st.markdown("---")
+    st.markdown("#### 🟢 Latest Transactions (refreshes every few seconds)")
+    for tx in st.session_state.demo_transactions[:20]:
+        status_map = {
+            'pending': ('⏳', 'PENDING', '#f4f6f7'),
+            'reviewing': ('🔎', 'REVIEWING', '#f9e79f'),
+            'blocked': ('🚫', 'BLOCKED', '#fadbd8'),
+            'approved': ('✅', 'LEGITIMATE', '#d5f5e3')
+        }
+        emoji, label, bgcolor = status_map.get(tx['status'], ('❓', tx['status'], '#d6dbdf'))
+        st.markdown(f"""
+        <div style="background-color:{bgcolor};border-left:4px solid #34495e;padding:8px;margin-bottom:10px;border-radius:4px;">
+        <b>{tx['merchant']}</b> [{tx['card']}] <br/>
+        <span style="color:#555;">Amount: ${tx['amount']:.2f} | Probability: {tx['fraud_prob']*100:.1f}%</span><br/>
+        <span style="color:#888;">Time: {tx['datetime']}</span> <br/>
+        <span style="font-size:18px;">{emoji}</span>
+        <b style="color:#2d3436;padding-left:8px;">{label}</b>
+        </div>
+        """, unsafe_allow_html=True)
+    st.caption("Dashboard demo is independent from model results and does not affect your uploaded analysis.")
