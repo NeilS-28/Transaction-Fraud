@@ -1,5 +1,5 @@
 import streamlit as st
-import streamlit_autorefresh
+# import streamlit_autorefresh
 import joblib
 import PyPDF2
 
